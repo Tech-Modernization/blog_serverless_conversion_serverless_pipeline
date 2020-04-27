@@ -1,7 +1,13 @@
 # Summary
 Cloudformation template that creates a codepipeline for serverless deployment
 
-# to create codepipeline
+# Features of the codepipeline:
+* Build the application in a codebuild container.
+* Deploy application to a dev ServerLess application.
+* Test the dev ServerLess application using codebuild.
+* Deploy application to a prod ServerLess application.
+
+# Create the codepipeline
 ```
 aws cloudformation deploy --stack-name cpStackServerless --template-file codepipeline_template.yml \
         --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
@@ -13,9 +19,6 @@ aws cloudformation deploy --stack-name cpStackServerless --template-file codepip
         CloudWatchLogGroup="cloudwatch log group for CodeBuild" \
         CloudWatchLogStream="cloudwatch log stream for CodeBuild"
 ```
-
-# Summary
-Cloudformation template that creates an AWS codepipeline. The pipeline gets its source from a github repo, deploys to a dev serverless application, test the dev application, and deploy to the prod serverless application.
 
 # Update the application
 Push a change to the application repo branch, the codepipeline should execute.

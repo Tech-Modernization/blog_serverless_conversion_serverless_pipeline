@@ -1,25 +1,3 @@
-#  * IaC workflow:
-#    * source change trigger build step
-#    * build step runs `aws cloudformation package`, which uploads application artifacts to S3, and saves a cloudformation template to S3 
-#    * deploy step deploys the stack using the local template
-#    * build step runs tests the deployed stack
-#    * build step does the above again
-#    * build step runs `aws cloudformation deploy`, which deploys the stack using the local template
-#    * build step runs tests the deployed stack
-#  * IaC for the codepipeline, which creates the followings:
-#    resources:
-#      * codepipeline
-#      * an S3 bucket to save the SAM file
-#      * codebuild to create the SAM file and load it into the bucket
-#      * deploy step to deploy the SAM file
-#      * (done) get stack's endpoint
-#      * codebuild to run test against the endpoint
-#      * deploy step to deploy the SAM file to the next API gateway and lambda function 
-#    permissions:
-#      * codebuild access to S3 bucket
-#      * codepipeline access to deploy serverless application
-
-
 AWSTemplateFormatVersion: 2010-09-09
 Resources:
   IAMRoleCodePipeline:

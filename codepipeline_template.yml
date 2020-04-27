@@ -260,10 +260,10 @@ Resources:
               Version: '1'
             RunOrder: 1
             Configuration:
-              PrimarySource: BuildArtifacts
+              PrimarySource: SourceArtifacts
               ProjectName: !Ref CodeBuildProjectTestDev
             InputArtifacts:
-            - Name: BuildArtifacts
+            - Name: SourceArtifacts
             - Name: DevStackOutput
             OutputArtifacts: []
         - Name: DeployProd

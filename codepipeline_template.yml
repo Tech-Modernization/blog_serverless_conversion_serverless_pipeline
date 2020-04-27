@@ -1,0 +1,319 @@
+#  * IaC workflow:
+#    * source change trigger build step
+#    * build step runs `aws cloudformation package`, which uploads application artifacts to S3, and saves a cloudformation template to S3 
+#    * deploy step deploys the stack using the local template
+#    * build step runs tests the deployed stack
+#    * build step does the above again
+#    * build step runs `aws cloudformation deploy`, which deploys the stack using the local template
+#    * build step runs tests the deployed stack
+#  * IaC for the codepipeline, which creates the followings:
+#    resources:
+#      * codepipeline
+#      * an S3 bucket to save the SAM file
+#      * codebuild to create the SAM file and load it into the bucket
+#      * deploy step to deploy the SAM file
+#      * (done) get stack's endpoint
+#      * codebuild to run test against the endpoint
+#      * deploy step to deploy the SAM file to the next API gateway and lambda function 
+#    permissions:
+#      * codebuild access to S3 bucket
+#      * codepipeline access to deploy serverless application
+
+
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  IAMRoleCodePipeline:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 's3:*'
+                  - 'codebuild:*'
+                  - 'cloudformation:*'
+                  - 'elasticbeanstalk:*'
+                  - "autoscaling:*"
+                  - "elasticloadbalancing:*"
+                  - "sns:*"
+                  - "logs:*"
+                  - "ec2:*"
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+
+  IAMRoleCFN:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - apigateway:*
+                  - codedeploy:*
+                  - lambda:*
+                  - cloudformation:CreateChangeSet
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:PutRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - dynamodb:DescribeTable
+                  - dynamodb:CreateTable
+                Resource: "*"
+                Effect: Allow
+            Version: '2012-10-17'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambdaExecute
+
+  IAMRoleCodeBuild:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codebuild-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Resource:
+                - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CloudWatchLogGroup}
+                - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CloudWatchLogGroup}:*
+                Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+            Version: 2012-10-17
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+  S3BucketPipeline:
+    Type: 'AWS::S3::Bucket'
+  S3BucketLambdaZip:
+    Type: 'AWS::S3::Bucket'
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                  nodejs: 12
+            build:
+              commands:
+                - npm install
+                - export BUCKET=${S3BucketLambdaZip}
+                - aws cloudformation package --template-file template.yml --s3-bucket $BUCKET --output-template-file outputtemplate.yml
+          artifacts:
+            type: zip
+            files:
+              - template.yml
+              - outputtemplate.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref CodeBuildType
+        Image: !Ref CodeBuildImage
+        ComputeType: !Ref CodeBuildComputeType
+        EnvironmentVariables: []
+        PrivilegedMode: false
+      ServiceRole: !GetAtt IAMRoleCodeBuild.Arn
+      Name: !Sub ${AWS::StackName}-CodeBuildProject
+      TimeoutInMinutes: 10
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Ref CloudWatchLogGroup
+          Status: ENABLED
+          StreamName: !Ref CloudWatchLogStream
+
+  CodeBuildProjectTestDev:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                  nodejs: 12
+            build:
+              commands:
+                - jq --version || yum install -y jq
+                - export APP_URL=$(cat $CODEBUILD_SRC_DIR_DevStackOutput/DevStackOutput.json | jq -r .APIEndPoint)
+                - bash test.sh
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref CodeBuildType
+        Image: !Ref CodeBuildImage
+        ComputeType: !Ref CodeBuildComputeType
+        EnvironmentVariables: []
+        PrivilegedMode: false
+      ServiceRole: !GetAtt IAMRoleCodeBuild.Arn
+      Name: !Sub ${AWS::StackName}-CodeBuildProjectTestDev
+      TimeoutInMinutes: 10
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Ref CloudWatchLogGroup
+          Status: ENABLED
+          StreamName: !Ref CloudWatchLogStream
+          
+  CodePipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3BucketPipeline
+      RoleArn: !GetAtt IAMRoleCodePipeline.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                - Name: SourceArtifacts
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              RunOrder: 1
+        - Name: Build
+          Actions:
+          - Name: Build
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Provider: CodeBuild
+              Version: '1'
+            RunOrder: 1
+            Configuration:
+              ProjectName: !Ref CodeBuildProject
+            OutputArtifacts:
+            - Name: BuildArtifacts
+            InputArtifacts:
+            - Name: SourceArtifacts
+        - Name: DeployDev
+          Actions:
+          - Name: DeployViaCF
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Version: '1'
+              Provider: CloudFormation
+            InputArtifacts:
+            - Name: BuildArtifacts
+            OutputArtifacts:
+            - Name: DevStackOutput
+            Configuration:
+              ActionMode: CREATE_UPDATE
+              Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+              RoleArn: !GetAtt IAMRoleCFN.Arn
+              StackName: !Sub ${AWS::StackName}SAMStackDev
+              TemplatePath: BuildArtifacts::outputtemplate.yml
+              OutputFileName: DevStackOutput.json
+            RunOrder: 1
+        - Name: TestDev
+          Actions:
+          - Name: TestDev
+            ActionTypeId:
+              Category: Test
+              Owner: AWS
+              Provider: CodeBuild
+              Version: '1'
+            RunOrder: 1
+            Configuration:
+              ProjectName: !Ref CodeBuildProjectTestDev
+            InputArtifacts:
+            - Name: BuildArtifacts
+            - Name: DevStackOutput
+            OutputArtifacts: []
+        - Name: DeployProd
+          Actions:
+          - Name: DeployViaCF
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Version: '1'
+              Provider: CloudFormation
+            InputArtifacts:
+            - Name: BuildArtifacts
+            OutputArtifacts:
+            - Name: ProdStackOutput
+            Configuration:
+              ActionMode: CREATE_UPDATE
+              Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+              RoleArn: !GetAtt IAMRoleCFN.Arn
+              StackName: !Sub ${AWS::StackName}SAMStackProd
+              TemplatePath: BuildArtifacts::outputtemplate.yml
+              OutputFileName: ProdStackOutput.json
+            RunOrder: 1
+Parameters:
+  GitHubUser:
+    Type: String
+    Description: GitHub User
+  GitHubRepo:
+    Type: String
+    Description: GitHub Repo to pull from. Only the Name. not the URL
+  GitHubBranch:
+    Type: String
+    Description: GitHub Branch
+  GitHubToken:
+    NoEcho: true
+    Type: String
+  CodeBuildType:
+    Type: String
+    Default: LINUX_CONTAINER
+  CodeBuildImage:
+    Type: String
+    Default: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+  CodeBuildComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_SMALL
+  CloudWatchLogGroup:
+    Type: String
+    Description: CodeBuild Log Group
+  CloudWatchLogStream:
+    Type: String
+    Description: CodeBuild Log Stream
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${CodePipeline}
+    Description: CodePipeline URL

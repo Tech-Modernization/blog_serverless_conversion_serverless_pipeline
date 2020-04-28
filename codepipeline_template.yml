@@ -19,12 +19,8 @@ Resources:
                   - 's3:*'
                   - 'codebuild:*'
                   - 'cloudformation:*'
-                  - 'elasticbeanstalk:*'
-                  - "autoscaling:*"
-                  - "elasticloadbalancing:*"
                   - "sns:*"
                   - "logs:*"
-                  - "ec2:*"
                   - 'iam:PassRole'
                 Resource: '*'
                 Effect: Allow
@@ -42,7 +38,7 @@ Resources:
             Action:
               - 'sts:AssumeRole'
       Policies:
-        - PolicyName: codepipeline-service
+        - PolicyName: cfn
           PolicyDocument:
             Statement:
               - Action:
@@ -63,6 +59,7 @@ Resources:
                   - s3:GetBucketVersioning
                   - dynamodb:DescribeTable
                   - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
                 Resource: "*"
                 Effect: Allow
             Version: '2012-10-17'
